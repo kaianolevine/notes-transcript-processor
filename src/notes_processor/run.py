@@ -56,14 +56,13 @@ def _extract_llm_json(result: object) -> dict:
         return result
 
     # Common attribute names across versions
-    for attr in ("data", "json", "parsed", "output"):
+    for attr in ("data", "json", "parsed", "output", "output_json", "parsed_json"):
         if hasattr(result, attr):
             val = getattr(result, attr)
             if isinstance(val, dict):
                 return val
-
     # Some versions keep the raw JSON text
-    for attr in ("content", "text", "raw", "response"):
+    for attr in ("content", "text", "raw", "response", "output_text"):
         if hasattr(result, attr):
             val = getattr(result, attr)
             if isinstance(val, str) and val.strip():
