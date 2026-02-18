@@ -19,6 +19,24 @@ LOG = log.get_logger()
 DOC_MIME = "application/vnd.google-apps.document"
 
 
+def _field(obj: object, name: str, default=None):
+    """Read a field from either a dict-like object or an attribute-based object."""
+
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+
+    # Try exact attribute name
+    if hasattr(obj, name):
+        return getattr(obj, name)
+
+    # Try common google drive variants
+    # mimeType -> mime_type
+    if name == "mimeType" and hasattr(obj, "mime_type"):
+        return getattr(obj, "mime_type")
+
+    return default
+
+
 def _safe_name(name: str) -> str:
     name = name.strip()
     name = re.sub(r"[\\/:*?\"<>|]+", "-", name)
@@ -37,13 +55,10 @@ def run() -> None:
         "Scanning incoming folder", extra={"incoming_folder_id": cfg.incoming_folder_id}
     )
 
-    files = [
-        f
-        for f in g.drive.get_files_in_folder(
-            cfg.incoming_folder_id, include_folders=False
-        )
-        if f.get("mimeType") == DOC_MIME
-    ]
+    files = []
+    for f in g.drive.get_files_in_folder(cfg.incoming_folder_id, include_folders=False):
+        if _field(f, "mimeType") == DOC_MIME:
+            files.append(f)
 
     if not files:
         LOG.info("No files found")
@@ -57,8 +72,8 @@ def run() -> None:
             LOG.info("Reached max files per run", extra={"max": cfg.max_files_per_run})
             break
 
-        file_id = f["id"]
-        name = f.get("name", file_id)
+        file_id = _field(f, "id")
+        name = _field(f, "name", file_id)
 
         # Defaults so failure metrics can still be emitted
         transcript = ""
