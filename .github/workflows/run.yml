@@ -14,11 +14,12 @@ jobs:
     timeout-minutes: 10
 
     env:
+      LOGGING_LEVEL: ${{ vars.LOGGING_LEVEL }}
       GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       INCOMING_FOLDER_ID: '1KHCvKl1j4sutaw9GqRFxeE0ruGWowy8a'
       OUTPUT_FOLDER_ID: '1gJtAD-ta8F_xY_v8a52wetih_sBb9EHv'
       PROCESSED_FOLDER_ID: '18H68m_WsJo1tCFpmuvVHsRIq6g4q7v0p'
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       #LLM_PROVIDER:
       #LLM_MODEL:
       #MAX_FILES_PER_RUN:
