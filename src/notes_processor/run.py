@@ -37,6 +37,11 @@ def _field(obj: object, name: str, default=None):
     return default
 
 
+def _is_insufficient_quota(err: Exception) -> bool:
+    msg = str(err)
+    return ("insufficient_quota" in msg) or ("exceeded your current quota" in msg)
+
+
 def _safe_name(name: str) -> str:
     name = name.strip()
     name = re.sub(r"[\\/:*?\"<>|]+", "-", name)
@@ -182,6 +187,13 @@ def run() -> None:
                 metrics_logger.emit(metrics)
             except Exception:
                 pass
+
+            if _is_insufficient_quota(e):
+                LOG.error(
+                    "OpenAI quota exhausted; stopping run early. Configure billing/credits for the API key, then re-run.",
+                    extra={"provider": cfg.llm_provider, "model": cfg.llm_model},
+                )
+                break
 
             # Continue to next file rather than failing the whole run
             continue
