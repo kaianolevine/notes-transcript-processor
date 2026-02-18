@@ -10,6 +10,10 @@ packages = [{ include = "notes_processor", from = "src" }]
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
 kaiano = { git = "https://github.com/kaianolevine/kaiano-common-utils.git", branch = "main" }
+jsonschema = "^4.23.0"
+
+[tool.poetry.scripts]
+notes-processor = "notes_processor.run:run"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.2"
@@ -31,3 +35,7 @@ source = ["project_name"]
 [tool.coverage.report]
 fail_under = 90
 show_missing = true
+
+[tool.isort]
+profile = "black"
+src_paths = ["src"]
