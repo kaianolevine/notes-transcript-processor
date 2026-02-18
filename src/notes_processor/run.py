@@ -42,6 +42,43 @@ def _is_insufficient_quota(err: Exception) -> bool:
     return ("insufficient_quota" in msg) or ("exceeded your current quota" in msg)
 
 
+def _extract_llm_json(result: object) -> dict:
+    """Extract parsed JSON from kaiano.llm result objects across versions.
+
+    Supports:
+      - dict returned directly
+      - result.data (older)
+      - result.json / result.parsed / result.output (newer)
+      - result.content / result.text containing JSON
+    """
+
+    if isinstance(result, dict):
+        return result
+
+    # Common attribute names across versions
+    for attr in ("data", "json", "parsed", "output"):
+        if hasattr(result, attr):
+            val = getattr(result, attr)
+            if isinstance(val, dict):
+                return val
+
+    # Some versions keep the raw JSON text
+    for attr in ("content", "text", "raw", "response"):
+        if hasattr(result, attr):
+            val = getattr(result, attr)
+            if isinstance(val, str) and val.strip():
+                try:
+                    parsed = json.loads(val)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+
+    raise TypeError(
+        f"Unsupported LLM result type/shape: {type(result).__name__}. Expected dict or an object with parsed JSON on .data/.json/.parsed/.output or JSON text on .content/.text"
+    )
+
+
 def _safe_name(name: str) -> str:
     name = name.strip()
     name = re.sub(r"[\\/:*?\"<>|]+", "-", name)
@@ -110,7 +147,7 @@ def run() -> None:
             result = llm.generate_json(
                 messages=messages, json_schema=NOTES_SCHEMA, schema_name="notes"
             )
-            notes = result.data
+            notes = _extract_llm_json(result)
             validate(instance=notes, schema=NOTES_SCHEMA)
 
             md = render_markdown(notes)

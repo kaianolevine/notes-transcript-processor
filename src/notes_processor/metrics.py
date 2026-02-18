@@ -51,7 +51,8 @@ class RunMetrics:
 class MetricsLogger:
     """Lightweight metrics logger for GitHub Actions + local runs.
 
-    - Always emits a single-line JSON record to stdout.
+    - Emits a human-readable summary to stdout.
+    - Also emits a single-line JSON record to stdout (machine-parsable).
     - Optionally appends JSONL to METRICS_PATH (useful for artifacts).
     """
 
@@ -59,12 +60,37 @@ class MetricsLogger:
         self.metrics_path = metrics_path or os.getenv("METRICS_PATH")
 
     def emit(self, metrics: RunMetrics) -> None:
-        line = metrics.to_json()
-        print(f"METRICS {line}")
+        data = asdict(metrics)
+
+        json_line = metrics.to_json()
+
+        status = "OK" if data["success"] else "FAIL"
+
+        print(f"METRICS | {status} | {data.get('model')} | {data.get('file_name')}")
+
+        print(
+            f"  tokens: {data.get('estimated_input_tokens')} → {data.get('estimated_output_tokens')}"
+        )
+        print(f"  duration: {round(data.get('duration_s', 0), 2)}s")
+
+        if data.get("error"):
+            print(f"  error: {data['error']}")
+
+        print(f"  run: {data.get('run_id')}")
+
+        # Machine-parsable single-line JSON (for log scrapers)
+        print(f"METRICS_JSON {json_line}")
+
+        # Optional JSONL artifact
         if self.metrics_path:
-            # Append JSONL
-            with open(self.metrics_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+            try:
+                with open(self.metrics_path, "a", encoding="utf-8") as f:
+                    f.write(json_line + "\n")
+            except Exception as e:
+                # Never fail the run due to metrics logging
+                print(
+                    f"METRICS_WARN failed to append metrics to {self.metrics_path}: {e}"
+                )
 
 
 class Timer:
