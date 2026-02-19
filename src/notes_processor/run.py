@@ -18,6 +18,7 @@ LOG = log.get_logger()
 
 DOC_MIME = "application/vnd.google-apps.document"
 TXT_MIME = "text/plain"
+FOLDER_MIME = "application/vnd.google-apps.folder"
 
 
 def _field(obj: object, name: str, default=None):
@@ -121,6 +122,98 @@ def _safe_name(name: str) -> str:
     return name[:180] if len(name) > 180 else name
 
 
+def _find_child_folder_id(g: GoogleAPI, parent_id: str, folder_name: str) -> str | None:
+    """Return the Drive folder id for `folder_name` under `parent_id`, if it exists."""
+
+    for item in g.drive.get_files_in_folder(parent_id, include_folders=True):
+        if (
+            _field(item, "mimeType") == FOLDER_MIME
+            and _field(item, "name") == folder_name
+        ):
+            return _field(item, "id")
+    return None
+
+
+def _create_child_folder(g: GoogleAPI, parent_id: str, folder_name: str) -> str:
+    """Create a Drive folder under `parent_id` and return its id.
+
+    The kaiano.google Drive facade has changed over time; try a few common method names.
+    """
+
+    for meth in (
+        "create_folder",
+        "create_drive_folder",
+        "create_folder_in_parent",
+        "mkdir",
+    ):
+        if hasattr(g.drive, meth):
+            created = getattr(g.drive, meth)(parent_id=parent_id, name=folder_name)
+            # created may be an id string, dict, or object
+            if isinstance(created, str):
+                return created
+            if isinstance(created, dict):
+                fid = created.get("id")
+                if fid:
+                    return fid
+            fid = _field(created, "id")
+            if fid:
+                return fid
+
+    # Last-resort: raw google drive service
+    if hasattr(g.drive, "service"):
+        body = {"name": folder_name, "mimeType": FOLDER_MIME, "parents": [parent_id]}
+        created = g.drive.service.files().create(body=body, fields="id").execute()
+        if isinstance(created, dict) and created.get("id"):
+            return created["id"]
+
+    raise TypeError(
+        "Drive client does not expose a supported folder creation method (expected create_folder/create_drive_folder/etc)"
+    )
+
+
+def _ensure_child_folder(g: GoogleAPI, parent_id: str, folder_name: str) -> str:
+    """Get or create a named child folder and return its id."""
+
+    existing = _find_child_folder_id(g, parent_id, folder_name)
+    if existing:
+        return existing
+    return _create_child_folder(g, parent_id, folder_name)
+
+
+def _ensure_path(g: GoogleAPI, root_id: str, parts: list[str]) -> str:
+    """Ensure the folder path root/parts exists and return the deepest folder id."""
+
+    cur = root_id
+    for part in parts:
+        # Skip empty path parts defensively
+        if not part:
+            continue
+        cur = _ensure_child_folder(g, cur, part)
+    return cur
+
+
+def _iter_transcript_files_recursive(
+    g: GoogleAPI, folder_id: str, rel_parts: list[str] | None = None
+):
+    """Yield (file_obj, rel_parts) for supported transcript files in folder and subfolders."""
+
+    rel_parts = rel_parts or []
+
+    for item in g.drive.get_files_in_folder(folder_id, include_folders=True):
+        mt = _field(item, "mimeType")
+        if mt == FOLDER_MIME:
+            child_id = _field(item, "id")
+            child_name = _field(item, "name")
+            if child_id and child_name:
+                yield from _iter_transcript_files_recursive(
+                    g, child_id, rel_parts + [child_name]
+                )
+            continue
+
+        if mt in (DOC_MIME, TXT_MIME):
+            yield item, rel_parts
+
+
 def run() -> None:
     cfg = load_config_from_env()
     g = GoogleAPI.from_env()
@@ -133,11 +226,9 @@ def run() -> None:
         "Scanning incoming folder", extra={"incoming_folder_id": cfg.incoming_folder_id}
     )
 
-    files = []
-    for f in g.drive.get_files_in_folder(cfg.incoming_folder_id, include_folders=False):
-        mt = _field(f, "mimeType")
-        if mt in (DOC_MIME, TXT_MIME):
-            files.append(f)
+    files: list[tuple[object, list[str]]] = list(
+        _iter_transcript_files_recursive(g, cfg.incoming_folder_id)
+    )
 
     if not files:
         LOG.info("No files found")
@@ -145,7 +236,7 @@ def run() -> None:
 
     processed_count = 0
 
-    for f in files:
+    for f, rel_parts in files:
         file_timer = Timer()
         if processed_count >= cfg.max_files_per_run:
             LOG.info("Reached max files per run", extra={"max": cfg.max_files_per_run})
@@ -154,6 +245,10 @@ def run() -> None:
         file_id = _field(f, "id")
         name = _field(f, "name", file_id)
         mime_type = _field(f, "mimeType")
+
+        # Preserve incoming folder structure in output/processed folders
+        output_parent_id = _ensure_path(g, cfg.output_folder_id, rel_parts)
+        processed_parent_id = _ensure_path(g, cfg.processed_folder_id, rel_parts)
 
         # Defaults so failure metrics can still be emitted
         transcript = ""
@@ -197,20 +292,20 @@ def run() -> None:
             md_name = f"{base} - notes.md"
 
             g.drive.upload_bytes(
-                parent_id=cfg.output_folder_id,
+                parent_id=output_parent_id,
                 filename=json_name,
                 content=json.dumps(notes, indent=2).encode("utf-8"),
                 mime_type="application/json",
             )
             g.drive.upload_bytes(
-                parent_id=cfg.output_folder_id,
+                parent_id=output_parent_id,
                 filename=md_name,
                 content=md.encode("utf-8"),
                 mime_type="text/markdown",
             )
 
             # Move original into processed folder (auditable + simple)
-            g.drive.move_file(file_id, new_parent_id=cfg.processed_folder_id)
+            g.drive.move_file(file_id, new_parent_id=processed_parent_id)
 
             processed_count += 1
             LOG.info("Done", extra={"file": name})
