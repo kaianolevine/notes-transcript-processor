@@ -18,7 +18,7 @@ jobs:
       GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       INCOMING_FOLDER_ID: '1KHCvKl1j4sutaw9GqRFxeE0ruGWowy8a'
-      OUTPUT_FOLDER_ID: '1gJtAD-ta8F_xY_v8a52wetih_sBb9EHv'
+      OUTPUT_FOLDER_ID: '10UJod9v7_fjEfWllo_R6iOGYMs4mfbJk'
       PROCESSED_FOLDER_ID: '18H68m_WsJo1tCFpmuvVHsRIq6g4q7v0p'
       #LLM_PROVIDER:
       #LLM_MODEL:
