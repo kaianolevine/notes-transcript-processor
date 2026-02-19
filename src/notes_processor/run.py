@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 
+from googleapiclient.errors import HttpError
 from jsonschema import validate
 from kaiano import logger as log
 from kaiano.google import GoogleAPI
@@ -122,6 +123,69 @@ def _safe_name(name: str) -> str:
     return name[:180] if len(name) > 180 else name
 
 
+def _get_drive_file_metadata(g: GoogleAPI, file_id: str) -> dict:
+    """Best-effort fetch of Drive file metadata across kaiano.google versions."""
+
+    # Try common facade methods first
+    for meth in (
+        "get_file",
+        "get_file_metadata",
+        "get_metadata",
+        "get_file_by_id",
+    ):
+        if hasattr(g.drive, meth):
+            meta = getattr(g.drive, meth)(file_id)
+            if isinstance(meta, dict):
+                return meta
+            # Some wrappers return objects
+            if meta is not None:
+                return {
+                    "id": _field(meta, "id"),
+                    "name": _field(meta, "name"),
+                    "mimeType": _field(meta, "mimeType"),
+                }
+
+    # Raw service fallback
+    if hasattr(g.drive, "service"):
+        meta = (
+            g.drive.service.files()
+            .get(fileId=file_id, fields="id,name,mimeType", supportsAllDrives=True)
+            .execute()
+        )
+        if isinstance(meta, dict):
+            return meta
+
+    return {"id": file_id}
+
+
+def _assert_drive_folder_access(g: GoogleAPI, folder_id: str, label: str) -> None:
+    """Fail fast with a clear error if a configured folder id is missing/inaccessible."""
+
+    try:
+        meta = _get_drive_file_metadata(g, folder_id)
+        mt = meta.get("mimeType")
+        if mt and mt != FOLDER_MIME:
+            raise ValueError(
+                f"{label} is not a folder (mimeType={mt}): {folder_id} ({meta.get('name')})"
+            )
+    except HttpError as e:
+        # Typical case when the service account/user cannot see the folder or the ID is wrong.
+        if (
+            getattr(e, "resp", None) is not None
+            and getattr(e.resp, "status", None) == 404
+        ):
+            raise ValueError(
+                f"{label} folder not found or not shared with this credential: {folder_id}. "
+                "Double-check the ID and ensure the folder is shared with the service account (or the OAuth user) running this job."
+            ) from e
+        raise
+    except Exception as e:
+        # Preserve the original error but add context.
+        raise RuntimeError(
+            f"Failed to verify {label} folder access for id={folder_id}: {e}"
+        ) from e
+
+
 def _find_child_folder_id(g: GoogleAPI, parent_id: str, folder_name: str) -> str | None:
     """Return the Drive folder id for `folder_name` under `parent_id`, if it exists."""
 
@@ -162,9 +226,25 @@ def _create_child_folder(g: GoogleAPI, parent_id: str, folder_name: str) -> str:
     # Last-resort: raw google drive service
     if hasattr(g.drive, "service"):
         body = {"name": folder_name, "mimeType": FOLDER_MIME, "parents": [parent_id]}
-        created = g.drive.service.files().create(body=body, fields="id").execute()
-        if isinstance(created, dict) and created.get("id"):
-            return created["id"]
+        try:
+            created = (
+                g.drive.service.files()
+                .create(body=body, fields="id", supportsAllDrives=True)
+                .execute()
+            )
+            if isinstance(created, dict) and created.get("id"):
+                return created["id"]
+        except HttpError as e:
+            # Drive returns 404 here when the *parent* folder id is wrong or not accessible.
+            if (
+                getattr(e, "resp", None) is not None
+                and getattr(e.resp, "status", None) == 404
+            ):
+                raise ValueError(
+                    f"Cannot create folder '{folder_name}' under parent '{parent_id}' (not found / not shared). "
+                    "Verify OUTPUT_FOLDER_ID / PROCESSED_FOLDER_ID and ensure they are shared with the credential running this job."
+                ) from e
+            raise
 
     raise TypeError(
         "Drive client does not expose a supported folder creation method (expected create_folder/create_drive_folder/etc)"
@@ -218,6 +298,11 @@ def run() -> None:
     cfg = load_config_from_env()
     g = GoogleAPI.from_env()
     llm = build_llm(provider=cfg.llm_provider, model=cfg.llm_model)
+
+    # Fail fast if any configured folder IDs are wrong or not shared with this credential.
+    _assert_drive_folder_access(g, cfg.incoming_folder_id, "Incoming")
+    _assert_drive_folder_access(g, cfg.output_folder_id, "Output")
+    _assert_drive_folder_access(g, cfg.processed_folder_id, "Processed")
 
     run_id = new_run_id()
     metrics_logger = MetricsLogger()
