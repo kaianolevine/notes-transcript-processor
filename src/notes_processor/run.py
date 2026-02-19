@@ -17,6 +17,7 @@ from .schema import NOTES_SCHEMA
 LOG = log.get_logger()
 
 DOC_MIME = "application/vnd.google-apps.document"
+TXT_MIME = "text/plain"
 
 
 def _field(obj: object, name: str, default=None):
@@ -40,6 +41,42 @@ def _field(obj: object, name: str, default=None):
 def _is_insufficient_quota(err: Exception) -> bool:
     msg = str(err)
     return ("insufficient_quota" in msg) or ("exceeded your current quota" in msg)
+
+
+def _read_transcript_text(g: GoogleAPI, file_id: str, mime_type: str) -> str:
+    """Read transcript text from either a Google Doc or a plain .txt file."""
+
+    if mime_type == DOC_MIME:
+        return g.drive.export_google_doc_as_text(file_id)
+
+    if mime_type == TXT_MIME:
+        # kaiano.google Drive helpers have varied over time; try a few common shapes.
+        for meth in (
+            "download_bytes",
+            "download_file_bytes",
+            "download_file_as_bytes",
+            "get_file_bytes",
+        ):
+            if hasattr(g.drive, meth):
+                b = getattr(g.drive, meth)(file_id)
+                if isinstance(b, (bytes, bytearray)):
+                    return bytes(b).decode("utf-8", errors="replace")
+
+        # Last-resort: some clients expose a `.files.get(...).execute()` style.
+        if hasattr(g.drive, "service"):
+            try:
+                req = g.drive.service.files().get_media(fileId=file_id)
+                data = req.execute()
+                if isinstance(data, (bytes, bytearray)):
+                    return bytes(data).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+
+        raise TypeError(
+            "Drive client does not expose a supported bytes download method for text/plain files"
+        )
+
+    raise ValueError(f"Unsupported mime type for transcript: {mime_type}")
 
 
 def _extract_llm_json(result: object) -> dict:
@@ -98,7 +135,8 @@ def run() -> None:
 
     files = []
     for f in g.drive.get_files_in_folder(cfg.incoming_folder_id, include_folders=False):
-        if _field(f, "mimeType") == DOC_MIME:
+        mt = _field(f, "mimeType")
+        if mt in (DOC_MIME, TXT_MIME):
             files.append(f)
 
     if not files:
@@ -115,6 +153,7 @@ def run() -> None:
 
         file_id = _field(f, "id")
         name = _field(f, "name", file_id)
+        mime_type = _field(f, "mimeType")
 
         # Defaults so failure metrics can still be emitted
         transcript = ""
@@ -126,7 +165,7 @@ def run() -> None:
         LOG.info("Processing transcript", extra={"file": name, "id": file_id})
 
         try:
-            transcript = g.drive.export_google_doc_as_text(file_id).strip()
+            transcript = _read_transcript_text(g, file_id, mime_type).strip()
             char_count_input = len(transcript)
             estimated_input_tokens = estimate_tokens(transcript)
 
