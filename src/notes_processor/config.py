@@ -34,15 +34,13 @@ def load_config_from_env() -> Config:
 
     providers_env = os.getenv("LLM_PROVIDERS")
     if providers_env:
-        providers = tuple(
-            p.strip() for p in providers_env.split(",") if p.strip()
-        )
+        providers = tuple(p.strip() for p in providers_env.split(",") if p.strip())
     else:
         # LLM_PROVIDER can also be comma-separated for multiple providers
         provider_env = os.getenv("LLM_PROVIDER", "anthropic")
-        providers = tuple(
-            p.strip() for p in provider_env.split(",") if p.strip()
-        ) or ("anthropic",)
+        providers = tuple(p.strip() for p in provider_env.split(",") if p.strip()) or (
+            "anthropic",
+        )
 
     return Config(
         incoming_folder_id=incoming,
