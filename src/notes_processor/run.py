@@ -368,6 +368,8 @@ def run() -> None:
         estimated_input_tokens = 0
         char_count_output = None
         estimated_output_tokens = None
+        current_provider: str | None = None
+        current_model: str | None = None
 
         LOG.info("Processing transcript", extra={"file": name, "id": file_id})
 
@@ -394,6 +396,8 @@ def run() -> None:
             first_md: str | None = None
 
             for provider, llm in llms.items():
+                current_provider = provider
+                current_model = _model_for(provider)
                 result = llm.generate_json(
                     messages=messages, json_schema=NOTES_SCHEMA, schema_name="notes"
                 )
@@ -428,33 +432,40 @@ def run() -> None:
             processed_count += 1
             LOG.info("Done", extra={"file": name})
 
-            metrics = RunMetrics(
-                run_id=run_id,
-                stage="file_complete",
-                file_id=file_id,
-                file_name=name,
-                char_count_input=char_count_input,
-                estimated_input_tokens=estimated_input_tokens,
-                model=cfg.llm_model,
-                provider=cfg.llm_provider,
-                duration_s=file_timer.elapsed(),
-                success=True,
-                error=None,
-                estimated_output_tokens=estimated_output_tokens,
-                char_count_output=char_count_output,
-                estimated_cost_usd=None,
-            )
-            try:
-                metrics_logger.emit(metrics)
-            except Exception:
-                # Metrics must never break the pipeline.
-                pass
+            # Emit one metrics record per provider so provider/model match.
+            for provider in providers:
+                metrics = RunMetrics(
+                    run_id=run_id,
+                    stage="file_complete",
+                    file_id=file_id,
+                    file_name=name,
+                    char_count_input=char_count_input,
+                    estimated_input_tokens=estimated_input_tokens,
+                    model=_model_for(provider),
+                    provider=provider,
+                    duration_s=file_timer.elapsed(),
+                    success=True,
+                    error=None,
+                    estimated_output_tokens=estimated_output_tokens,
+                    char_count_output=char_count_output,
+                    estimated_cost_usd=None,
+                )
+                try:
+                    metrics_logger.emit(metrics)
+                except Exception:
+                    pass
 
         except Exception as e:
             LOG.exception(
                 "Failed processing transcript", extra={"file": name, "id": file_id}
             )
 
+            # Use the provider/model that was running when the error occurred.
+            fail_provider = (
+                current_provider if current_provider is not None else cfg.llm_provider
+            )
+            fail_model = current_model if current_model is not None else cfg.llm_model
+
             metrics = RunMetrics(
                 run_id=run_id,
                 stage="file_complete",
@@ -462,8 +473,8 @@ def run() -> None:
                 file_name=name,
                 char_count_input=char_count_input,
                 estimated_input_tokens=estimated_input_tokens,
-                model=cfg.llm_model,
-                provider=cfg.llm_provider,
+                model=fail_model,
+                provider=fail_provider,
                 duration_s=file_timer.elapsed(),
                 success=False,
                 error=str(e),
@@ -478,8 +489,8 @@ def run() -> None:
 
             if _is_insufficient_quota(e):
                 LOG.error(
-                    "OpenAI quota exhausted; stopping run early. Configure billing/credits for the API key, then re-run.",
-                    extra={"provider": cfg.llm_provider, "model": cfg.llm_model},
+                    "LLM quota exhausted; stopping run early. Configure billing/credits for the API key, then re-run.",
+                    extra={"provider": fail_provider, "model": fail_model},
                 )
                 break
 
