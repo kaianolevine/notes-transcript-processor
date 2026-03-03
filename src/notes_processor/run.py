@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from googleapiclient.errors import HttpError
@@ -115,6 +116,17 @@ def _extract_llm_json(result: object) -> dict:
     raise TypeError(
         f"Unsupported LLM result type/shape: {type(result).__name__}. Expected dict or an object with parsed JSON on .data/.json/.parsed/.output or JSON text on .content/.text"
     )
+
+
+def _provider_label(provider: str) -> str:
+    """Human-friendly label for provider used in filenames."""
+
+    p = provider.lower().strip()
+    if p == "openai":
+        return "chatgpt"
+    if p in ("anthropic", "claude"):
+        return "claude"
+    return p
 
 
 def _safe_name(name: str) -> str:
@@ -297,7 +309,20 @@ def _iter_transcript_files_recursive(
 def run() -> None:
     cfg = load_config_from_env()
     g = GoogleAPI.from_env()
-    llm = build_llm(provider=cfg.llm_provider, model=cfg.llm_model)
+    providers = getattr(cfg, "llm_providers", (cfg.llm_provider,))
+    # Allow provider-specific model overrides while keeping LLM_MODEL as a default.
+    def _model_for(provider: str) -> str:
+        p = provider.lower().strip()
+        if p == "openai":
+            return os.getenv("OPENAI_MODEL", cfg.llm_model)
+        if p in ("anthropic", "claude"):
+            return os.getenv("ANTHROPIC_MODEL", cfg.llm_model)
+        return cfg.llm_model
+
+    llms = {
+        provider: build_llm(provider=provider, model=_model_for(provider))
+        for provider in providers
+    }
 
     # Fail fast if any configured folder IDs are wrong or not shared with this credential.
     _assert_drive_folder_access(g, cfg.incoming_folder_id, "Incoming")
@@ -362,32 +387,46 @@ def run() -> None:
                 LLMMessage(role=m["role"], content=m["content"]) for m in msg_dicts
             ]
 
-            result = llm.generate_json(
-                messages=messages, json_schema=NOTES_SCHEMA, schema_name="notes"
-            )
-            notes = _extract_llm_json(result)
-            validate(instance=notes, schema=NOTES_SCHEMA)
-
-            md = render_markdown(notes)
-            char_count_output = len(md)
-            estimated_output_tokens = estimate_tokens(md)
-
+            # Run all configured providers and write labeled outputs.
             base = _safe_name(name)
-            json_name = f"{base} - notes.json"
-            md_name = f"{base} - notes.md"
+            first_md: str | None = None
 
-            g.drive.upload_bytes(
-                parent_id=output_parent_id,
-                filename=json_name,
-                content=json.dumps(notes, indent=2).encode("utf-8"),
-                mime_type="application/json",
-            )
-            g.drive.upload_bytes(
-                parent_id=output_parent_id,
-                filename=md_name,
-                content=md.encode("utf-8"),
-                mime_type="text/markdown",
-            )
+            for provider, llm in llms.items():
+                result = llm.generate_json(
+                    messages=messages, json_schema=NOTES_SCHEMA, schema_name="notes"
+                )
+                notes = _extract_llm_json(result)
+                validate(instance=notes, schema=NOTES_SCHEMA)
+
+                md = render_markdown(notes)
+                if first_md is None:
+                    first_md = md
+
+                label = _provider_label(provider)
+
+                if len(providers) == 1:
+                    json_name = f"{base} - notes.json"
+                    md_name = f"{base} - notes.md"
+                else:
+                    json_name = f"{base} - notes - {label}.json"
+                    md_name = f"{base} - notes - {label}.md"
+
+                g.drive.upload_bytes(
+                    parent_id=output_parent_id,
+                    filename=json_name,
+                    content=json.dumps(notes, indent=2).encode("utf-8"),
+                    mime_type="application/json",
+                )
+                g.drive.upload_bytes(
+                    parent_id=output_parent_id,
+                    filename=md_name,
+                    content=md.encode("utf-8"),
+                    mime_type="text/markdown",
+                )
+
+            if first_md is not None:
+                char_count_output = len(first_md)
+                estimated_output_tokens = estimate_tokens(first_md)
 
             # Move original into processed folder (auditable + simple)
             g.drive.move_file(file_id, new_parent_id=processed_parent_id)
