@@ -18,6 +18,33 @@ from .schema import NOTES_SCHEMA
 
 LOG = log.get_logger()
 
+
+def _filter_notes_to_schema(data: dict, schema: dict) -> dict:
+    """Keep only keys allowed by the schema; drop extra keys from model output.
+
+    Handles top-level properties and nested drills/common_mistakes items
+    so that additionalProperties from the model don't fail validation.
+    """
+    allowed = set(schema.get("properties", {}))
+    out = {k: data[k] for k in allowed if k in data}
+
+    if "drills" in out and isinstance(out["drills"], list):
+        drill_props = {"name", "goal", "steps"}
+        out["drills"] = [
+            {k: item[k] for k in drill_props if k in item}
+            for item in out["drills"]
+            if isinstance(item, dict)
+        ]
+    if "common_mistakes" in out and isinstance(out["common_mistakes"], list):
+        mistake_props = {"mistake", "correction"}
+        out["common_mistakes"] = [
+            {k: item[k] for k in mistake_props if k in item}
+            for item in out["common_mistakes"]
+            if isinstance(item, dict)
+        ]
+    return out
+
+
 DOC_MIME = "application/vnd.google-apps.document"
 TXT_MIME = "text/plain"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -220,6 +247,7 @@ def _anthropic_generate_notes(
         s = "\n".join(lines)
 
     data = json.loads(s)
+    data = _filter_notes_to_schema(data, json_schema)
     validate(instance=data, schema=json_schema)
     return data
 
@@ -507,6 +535,7 @@ def run() -> None:
                         schema_name="notes",
                     )
                     notes = _extract_llm_json(result)
+                notes = _filter_notes_to_schema(notes, NOTES_SCHEMA)
                 validate(instance=notes, schema=NOTES_SCHEMA)
 
                 md = render_markdown(notes)
