@@ -42,8 +42,13 @@ def _field(obj: object, name: str, default=None):
 
 
 def _is_insufficient_quota(err: Exception) -> bool:
-    msg = str(err)
-    return ("insufficient_quota" in msg) or ("exceeded your current quota" in msg)
+    """True if the error indicates quota/credits exhausted (OpenAI or Anthropic)."""
+    msg = str(err).lower()
+    return (
+        "insufficient_quota" in msg
+        or "exceeded your current quota" in msg
+        or "credit balance is too low" in msg
+    )
 
 
 def _read_transcript_text(g: GoogleAPI, file_id: str, mime_type: str) -> str:
@@ -318,7 +323,7 @@ def run() -> None:
         if p == "openai":
             return os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         if p in ("anthropic", "claude"):
-            return os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+            return os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
         return os.getenv("LLM_MODEL", cfg.llm_model)
 
     llms = {
