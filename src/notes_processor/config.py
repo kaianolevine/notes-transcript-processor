@@ -35,9 +35,7 @@ def load_config_from_env() -> Config:
     providers_env = os.getenv("LLM_PROVIDERS")
     if providers_env:
         providers: Tuple[str, ...] = tuple(
-            p.strip()
-            for p in providers_env.split(",")
-            if p.strip()
+            p.strip() for p in providers_env.split(",") if p.strip()
         )
     else:
         providers = (os.getenv("LLM_PROVIDER", "openai"),)

@@ -310,6 +310,7 @@ def run() -> None:
     cfg = load_config_from_env()
     g = GoogleAPI.from_env()
     providers = getattr(cfg, "llm_providers", (cfg.llm_provider,))
+
     # Allow provider-specific model overrides while keeping LLM_MODEL as a default.
     def _model_for(provider: str) -> str:
         p = provider.lower().strip()
