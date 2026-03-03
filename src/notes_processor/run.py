@@ -135,96 +135,6 @@ def _provider_label(provider: str) -> str:
     return p
 
 
-def _extract_anthropic_text(resp: object) -> str:
-    """Extract full text from an Anthropic messages.create() response.
-
-    Tries get_final_text(), then content blocks as dict or object.
-    Used here so we control extraction regardless of kaiano version in CI.
-    """
-    # Prefer SDK helper when available
-    if callable(getattr(resp, "get_final_text", None)):
-        try:
-            text = resp.get_final_text()
-            if isinstance(text, str) and text.strip():
-                return text.strip()
-        except Exception:
-            pass
-
-    msg = resp
-    if getattr(resp, "message", None) is not None:
-        msg = resp.message
-    content = getattr(msg, "content", None) or []
-    parts = []
-    for block in content:
-        if isinstance(block, dict):
-            if block.get("type") == "text":
-                t = block.get("text") or ""
-                if isinstance(t, str) and t.strip():
-                    parts.append(t)
-        else:
-            if getattr(block, "type", None) == "text":
-                t = getattr(block, "text", None)
-                if t is None and hasattr(block, "__getitem__"):
-                    try:
-                        t = block["text"]
-                    except (KeyError, TypeError):
-                        t = None
-                if isinstance(t, str) and t.strip():
-                    parts.append(t)
-    out = "\n".join(parts).strip()
-    if out:
-        return out
-    raise RuntimeError(
-        f"Anthropic response had no text content (content has {len(content)} blocks)"
-    )
-
-
-def _anthropic_generate_notes(
-    messages: list[LLMMessage], json_schema: dict, model: str
-) -> dict:
-    """Call Anthropic API directly and return parsed, validated notes dict.
-
-    Uses ANTHROPIC_API_KEY. Extracts text with _extract_anthropic_text,
-    strips optional markdown code fence, then parse_json + validate.
-    """
-    from anthropic import Anthropic
-
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
-
-    system_parts = [m.content for m in messages if m.role == "system"]
-    non_system = [m for m in messages if m.role != "system"]
-    if not non_system:
-        raise RuntimeError("Anthropic needs at least one non-system message")
-
-    client = Anthropic(api_key=api_key)
-    resp = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system="\n\n".join(system_parts) if system_parts else None,
-        messages=[{"role": m.role, "content": m.content} for m in non_system],
-        temperature=0.2,
-    )
-    raw = _extract_anthropic_text(resp)
-    if not raw or not raw.strip():
-        raise RuntimeError("Anthropic returned empty text; cannot parse JSON")
-
-    # Strip markdown code fence if present (e.g. ```json ... ```)
-    s = raw.strip()
-    if s.startswith("```"):
-        lines = s.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        s = "\n".join(lines)
-
-    data = json.loads(s)
-    validate(instance=data, schema=json_schema)
-    return data
-
-
 def _safe_name(name: str) -> str:
     name = name.strip()
     name = re.sub(r"[\\/:*?\"<>|]+", "-", name)
@@ -417,12 +327,7 @@ def run() -> None:
             return os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
         return os.getenv("LLM_MODEL", cfg.llm_model)
 
-    # Only use kaiano LLM for non-Anthropic providers; Anthropic is handled in-repo.
-    llms = {
-        p: build_llm(provider=p, model=_model_for(p))
-        for p in providers
-        if p.lower() not in ("anthropic", "claude")
-    }
+    llms = {p: build_llm(provider=p, model=_model_for(p)) for p in providers}
 
     # Fail fast if any configured folder IDs are wrong or not shared with this credential.
     _assert_drive_folder_access(g, cfg.incoming_folder_id, "Incoming")
@@ -496,18 +401,12 @@ def run() -> None:
             for provider in providers:
                 current_provider = provider
                 current_model = _model_for(provider)
-                if provider.lower() in ("anthropic", "claude"):
-                    notes = _anthropic_generate_notes(
-                        messages, NOTES_SCHEMA, current_model
-                    )
-                else:
-                    llm = llms[provider]
-                    result = llm.generate_json(
-                        messages=messages,
-                        json_schema=NOTES_SCHEMA,
-                        schema_name="notes",
-                    )
-                    notes = _extract_llm_json(result)
+                result = llms[provider].generate_json(
+                    messages=messages,
+                    json_schema=NOTES_SCHEMA,
+                    schema_name="notes",
+                )
+                notes = _extract_llm_json(result)
                 validate(instance=notes, schema=NOTES_SCHEMA)
 
                 md = render_markdown(notes)
