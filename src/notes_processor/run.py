@@ -388,7 +388,7 @@ def run() -> None:
                 LLMMessage(role=m["role"], content=m["content"]) for m in msg_dicts
             ]
 
-            # Run all configured providers and write labeled outputs.
+            # Run all configured providers and write labeled markdown outputs.
             base = _safe_name(name)
             first_md: str | None = None
 
@@ -406,18 +406,10 @@ def run() -> None:
                 label = _provider_label(provider)
 
                 if len(providers) == 1:
-                    json_name = f"{base} - notes.json"
                     md_name = f"{base} - notes.md"
                 else:
-                    json_name = f"{base} - notes - {label}.json"
                     md_name = f"{base} - notes - {label}.md"
 
-                g.drive.upload_bytes(
-                    parent_id=output_parent_id,
-                    filename=json_name,
-                    content=json.dumps(notes, indent=2).encode("utf-8"),
-                    mime_type="application/json",
-                )
                 g.drive.upload_bytes(
                     parent_id=output_parent_id,
                     filename=md_name,

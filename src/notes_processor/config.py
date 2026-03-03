@@ -11,11 +11,11 @@ class Config:
     output_folder_id: str
     processed_folder_id: str
 
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4.1-mini"
+    llm_provider: str = "anthropic"
+    llm_model: str = "claude-3-5-sonnet-20241022"
     # One or more providers to run for each transcript, in order.
     # e.g. "openai", "anthropic" (or "claude").
-    llm_providers: Tuple[str, ...] = ("openai",)
+    llm_providers: Tuple[str, ...] = ("anthropic",)
 
     max_files_per_run: int = 25
     min_transcript_chars: int = 200
@@ -38,14 +38,14 @@ def load_config_from_env() -> Config:
             p.strip() for p in providers_env.split(",") if p.strip()
         )
     else:
-        providers = (os.getenv("LLM_PROVIDER", "openai"),)
+        providers = (os.getenv("LLM_PROVIDER", "anthropic"),)
 
     return Config(
         incoming_folder_id=incoming,
         output_folder_id=out,
         processed_folder_id=processed,
         llm_provider=providers[0],
-        llm_model=os.getenv("LLM_MODEL", "gpt-4.1-mini"),
+        llm_model=os.getenv("LLM_MODEL", "claude-3-5-sonnet-20241022"),
         llm_providers=providers,
         max_files_per_run=int(os.getenv("MAX_FILES_PER_RUN", "25")),
         min_transcript_chars=int(os.getenv("MIN_TRANSCRIPT_CHARS", "200")),
