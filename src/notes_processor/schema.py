@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 # Canonical schema for transcript -> notes transformation.
-# Keep this stable to preserve consistent formatting across many transcripts.
+# We validate types when present but require nothing and allow extra fields
+# so different models (and richer outputs) don't get rejected.
 NOTES_SCHEMA: dict = {
     "type": "object",
-    "additionalProperties": False,
+    "additionalProperties": True,
     "properties": {
         "title": {"type": "string"},
         "summary": {"type": "string"},
@@ -13,39 +14,27 @@ NOTES_SCHEMA: dict = {
             "type": "array",
             "items": {
                 "type": "object",
-                "additionalProperties": False,
+                "additionalProperties": True,
                 "properties": {
                     "name": {"type": "string"},
                     "goal": {"type": "string"},
                     "steps": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["name", "goal", "steps"],
             },
         },
         "common_mistakes": {
             "type": "array",
             "items": {
                 "type": "object",
-                "additionalProperties": False,
+                "additionalProperties": True,
                 "properties": {
                     "mistake": {"type": "string"},
                     "correction": {"type": "string"},
                 },
-                "required": ["mistake", "correction"],
             },
         },
         "patterns": {"type": "array", "items": {"type": "string"}},
         "quotes": {"type": "array", "items": {"type": "string"}},
         "logistics": {"type": "array", "items": {"type": "string"}},
     },
-    "required": [
-        "title",
-        "summary",
-        "key_concepts",
-        "drills",
-        "common_mistakes",
-        "patterns",
-        "quotes",
-        "logistics",
-    ],
 }
