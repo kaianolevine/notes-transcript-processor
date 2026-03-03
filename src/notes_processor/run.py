@@ -311,14 +311,15 @@ def run() -> None:
     g = GoogleAPI.from_env()
     providers = getattr(cfg, "llm_providers", (cfg.llm_provider,))
 
-    # Allow provider-specific model overrides while keeping LLM_MODEL as a default.
+    # Use provider-specific model env vars and defaults so we never send e.g. a Claude
+    # model name to OpenAI when both providers are enabled.
     def _model_for(provider: str) -> str:
         p = provider.lower().strip()
         if p == "openai":
-            return os.getenv("OPENAI_MODEL", cfg.llm_model)
+            return os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         if p in ("anthropic", "claude"):
-            return os.getenv("ANTHROPIC_MODEL", cfg.llm_model)
-        return cfg.llm_model
+            return os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+        return os.getenv("LLM_MODEL", cfg.llm_model)
 
     llms = {
         provider: build_llm(provider=provider, model=_model_for(provider))
