@@ -2,23 +2,74 @@ from __future__ import annotations
 
 from typing import Any
 
-# Keys we render in fixed order/sections; any other keys go into "Additional".
-_CANONICAL_KEYS = frozenset(
+# ---------------------------------------------------------------------------
+# CANONICAL RENDER ORDER
+#
+# Sections are rendered in this order when present. Any key returned by the
+# model that is not in this list falls through to the "Additional" catch-all
+# at the bottom — which acts as a safety net for model-invented keys.
+#
+# When you promote a suggested_new_section to a real section:
+#   1. Add the key + render function/entry to _SECTION_RENDERERS below.
+#   2. Add the key to _KNOWN_KEYS so it doesn't double-render in Additional.
+#   3. Add the key to schema.py properties.
+#   4. Add the key to prompt.py _KNOWN_SECTIONS.
+# ---------------------------------------------------------------------------
+
+# Keys handled by explicit render logic (will not appear in Additional).
+_KNOWN_KEYS = frozenset(
     {
         "title",
+        "date",
+        "session_type",
+        "participants",
         "summary",
         "key_concepts",
+        "vocabulary_terms",
         "drills",
         "common_mistakes",
-        "patterns",
+        "patterns_and_sequences",
+        "student_observations",
+        "action_items",
+        "competition_notes",
         "quotes",
-        "logistics",
+        "references",
+        "off_topic_notes",
+        "suggested_new_sections",
     }
 )
 
 
-def _format_value(val: Any) -> list[str]:
-    """Turn a value into markdown lines (bullets or single line)."""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _h2(title: str) -> list[str]:
+    return [f"## {title}", ""]
+
+
+def _h3(title: str) -> list[str]:
+    return [f"### {title}"]
+
+
+def _bullet(text: str) -> str:
+    return f"- {text}"
+
+
+def _skip_if_empty(val: Any) -> bool:
+    """Return True if the value should cause the whole section to be skipped."""
+    if val is None:
+        return True
+    if isinstance(val, (list, dict)) and not val:
+        return True
+    if isinstance(val, str) and not val.strip():
+        return True
+    return False
+
+
+def _generic_value(val: Any) -> list[str]:
+    """Fallback renderer for unexpected shapes (used in Additional catch-all)."""
     if val is None:
         return []
     if isinstance(val, str):
@@ -27,70 +78,228 @@ def _format_value(val: Any) -> list[str]:
         out: list[str] = []
         for item in val:
             if isinstance(item, str):
-                out.append(f"- {item}")
+                out.append(_bullet(item))
             elif isinstance(item, dict):
-                parts = [f"  - **{k}**: {v}" for k, v in item.items() if v]
-                out.extend(parts)
+                out.extend(f"  - **{k}**: {v}" for k, v in item.items() if v)
             else:
-                out.append(f"- {item}")
+                out.append(_bullet(str(item)))
         return out
     if isinstance(val, dict):
         return [f"- **{k}**: {v}" for k, v in val.items() if v]
     return [str(val)]
 
 
-def render_markdown(notes: dict[str, Any]) -> str:
-    """Render Markdown from notes JSON. Uses canonical sections first, then any extra keys."""
+# ---------------------------------------------------------------------------
+# Section renderers
+# ---------------------------------------------------------------------------
 
-    def _lines(items: list[str]) -> str:
-        return "\n".join(items)
 
+def _render_metadata(notes: dict[str, Any]) -> list[str]:
+    """Render date / session_type / participants as a tidy metadata block."""
     lines: list[str] = []
-    lines.append(f"# {notes.get('title') or 'Notes'}")
-    lines.append("")
-    lines.append("## Summary")
-    lines.append((notes.get("summary") or "").strip())
-    lines.append("")
-    lines.append("## Key Concepts")
-    for x in notes.get("key_concepts", []):
-        lines.append(f"- {x}")
-    lines.append("")
-    lines.append("## Drills / Exercises")
-    for i, d in enumerate(notes.get("drills", []), start=1):
-        name = d.get("name", "").strip()
-        goal = d.get("goal", "").strip()
-        lines.append(f"{i}. **{name}** — {goal}".rstrip())
-        for s in d.get("steps", []):
-            lines.append(f"   - {s}")
-    lines.append("")
-    lines.append("## Common Mistakes & Corrections")
-    for m in notes.get("common_mistakes", []):
-        lines.append(f"- **{m.get('mistake', '')}** → {m.get('correction', '')}")
-    lines.append("")
-    lines.append("## Patterns / Sequences")
-    for p in notes.get("patterns", []):
-        lines.append(f"- {p}")
-    lines.append("")
-    lines.append("## Memorable Quotes")
-    for q in notes.get("quotes", []):
-        lines.append(f'- "{q}"')
-    lines.append("")
-    lines.append("## Announcements / Logistics")
-    for logistics_item in notes.get("logistics", []):
-        lines.append(f"- {logistics_item}")
 
-    # Any additional keys from the model (e.g. dance_style, key_reminders, sections)
-    extra = {k: notes[k] for k in notes if k not in _CANONICAL_KEYS}
+    date = (notes.get("date") or "").strip()
+    session_type = (notes.get("session_type") or "").strip().replace("_", " ").title()
+
+    if date or session_type:
+        lines.append("")
+        if date:
+            lines.append(f"**Date:** {date}  ")
+        if session_type:
+            lines.append(f"**Session type:** {session_type}  ")
+
+    participants = notes.get("participants") or []
+    if participants:
+        lines.append("")
+        lines.append("**Participants:**")
+        for p in participants:
+            if not isinstance(p, dict):
+                continue
+            name = (p.get("name") or "").strip()
+            role = (p.get("role") or "").strip()
+            label = (p.get("label") or "").strip()
+            parts = []
+            if name:
+                parts.append(name)
+            if role:
+                parts.append(role)
+            if label and label not in parts:
+                parts.append(f"({label})")
+            if parts:
+                lines.append(f"- {' — '.join(parts)}")
+
+    return lines
+
+
+def _render_key_concepts(items: list) -> list[str]:
+    lines = [*_h2("Key Concepts")]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+    return lines
+
+
+def _render_vocabulary_terms(items: list) -> list[str]:
+    lines = [*_h2("Vocabulary Terms")]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        term = (item.get("term") or "").strip()
+        defn = (item.get("definition") or "").strip()
+        if term:
+            lines.append(f"- **{term}**" + (f": {defn}" if defn else ""))
+    return lines
+
+
+def _render_drills(items: list) -> list[str]:
+    lines = [*_h2("Drills / Exercises")]
+    for i, d in enumerate(items, start=1):
+        if not isinstance(d, dict):
+            continue
+        name = (d.get("name") or "").strip()
+        goal = (d.get("goal") or "").strip()
+        header = f"{i}. **{name}**" if name else f"{i}."
+        if goal:
+            header += f" — {goal}"
+        lines.append(header)
+        for step in d.get("steps") or []:
+            if isinstance(step, str) and step.strip():
+                lines.append(f"   - {step.strip()}")
+    return lines
+
+
+def _render_common_mistakes(items: list) -> list[str]:
+    lines = [*_h2("Common Mistakes & Corrections")]
+    for m in items:
+        if not isinstance(m, dict):
+            continue
+        mistake = (m.get("mistake") or "").strip()
+        correction = (m.get("correction") or "").strip()
+        if mistake:
+            lines.append(
+                f"- **{mistake}**" + (f" → {correction}" if correction else "")
+            )
+    return lines
+
+
+def _render_simple_list(heading: str, items: list) -> list[str]:
+    lines = [*_h2(heading)]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+    return lines
+
+
+def _render_quotes(items: list) -> list[str]:
+    lines = [*_h2("Memorable Quotes")]
+    for q in items:
+        if isinstance(q, str) and q.strip():
+            lines.append(f'- "{q.strip()}"')
+    return lines
+
+
+def _render_suggested_new_sections(items: list) -> list[str]:
+    lines = [
+        *_h2("⚑ Suggested New Sections"),
+        "> The model flagged the following content as potentially recurring but "
+        "not fitting any existing section. Review periodically and promote to "
+        "the schema if warranted.",
+        "",
+    ]
+    for s in items:
+        if not isinstance(s, dict):
+            continue
+        name = (s.get("suggested_name") or "").strip()
+        why = (s.get("rationale") or "").strip()
+        sample = (s.get("sample_content") or "").strip()
+        if name:
+            lines.append(f"### `{name}`")
+        if why:
+            lines.append(f"**Why flagged:** {why}")
+        if sample:
+            lines.append(f"**Example:** {sample}")
+        lines.append("")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Ordered render plan
+# Each entry: (key, renderer_fn)
+# Renderer receives the value for that key and returns list[str].
+# ---------------------------------------------------------------------------
+_SECTION_RENDERERS: list[tuple[str, Any]] = [
+    ("key_concepts", _render_key_concepts),
+    ("vocabulary_terms", _render_vocabulary_terms),
+    ("drills", _render_drills),
+    ("common_mistakes", _render_common_mistakes),
+    (
+        "patterns_and_sequences",
+        lambda v: _render_simple_list("Patterns & Sequences", v),
+    ),
+    ("student_observations", lambda v: _render_simple_list("Student Observations", v)),
+    ("action_items", lambda v: _render_simple_list("Action Items", v)),
+    ("competition_notes", lambda v: _render_simple_list("Competition Notes", v)),
+    ("quotes", _render_quotes),
+    ("references", lambda v: _render_simple_list("References", v)),
+    ("off_topic_notes", lambda v: _render_simple_list("Off-Topic Notes", v)),
+    ("suggested_new_sections", _render_suggested_new_sections),
+]
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def render_markdown(notes: dict[str, Any]) -> str:
+    """Render a notes JSON dict to a Markdown string.
+
+    Sections are rendered in canonical order and only when the value is
+    non-empty. Unknown keys from the model are collected into an Additional
+    section at the end as a safety net.
+    """
+    lines: list[str] = []
+
+    # Title
+    title = (notes.get("title") or "Notes").strip()
+    lines.append(f"# {title}")
+
+    # Metadata block (date, session_type, participants)
+    lines.extend(_render_metadata(notes))
+    lines.append("")
+
+    # Summary
+    summary = (notes.get("summary") or "").strip()
+    if summary:
+        lines.extend(_h2("Summary"))
+        lines.append(summary)
+        lines.append("")
+
+    # Canonical sections in order
+    for key, renderer in _SECTION_RENDERERS:
+        val = notes.get(key)
+        if _skip_if_empty(val):
+            continue
+        lines.append("")
+        lines.extend(renderer(val))
+        lines.append("")
+
+    # Additional catch-all — keys the model invented that aren't in _KNOWN_KEYS
+    extra = {
+        k: v for k, v in notes.items() if k not in _KNOWN_KEYS and not _skip_if_empty(v)
+    }
     if extra:
         lines.append("")
-        lines.append("## Additional information")
+        lines.extend(_h2("Additional"))
         for key, val in extra.items():
-            if val is None:
-                continue
             label = key.replace("_", " ").title()
-            lines.append(f"### {label}")
-            for line in _format_value(val):
-                lines.append(line)
+            lines.extend(_h3(label))
+            lines.extend(_generic_value(val))
             lines.append("")
+
+    # Trim trailing blank lines, add final newline
+    while lines and lines[-1] == "":
+        lines.pop()
     lines.append("")
-    return _lines(lines)
+
+    return "\n".join(lines)

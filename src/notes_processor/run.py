@@ -389,7 +389,7 @@ def run() -> None:
                 continue
 
             # Build kaiano.llm messages
-            msg_dicts = build_messages(transcript)
+            msg_dicts = build_messages(transcript, source_filename=name)
             messages = [
                 LLMMessage(role=m["role"], content=m["content"]) for m in msg_dicts
             ]
