@@ -190,6 +190,26 @@ def _render_simple_list(heading: str, items: list) -> list[str]:
     return lines
 
 
+def _render_references(items: list) -> list[str]:
+    """References can be strings or objects with name/type/context."""
+    lines = [*_h2("References")]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+        elif isinstance(item, dict):
+            name = (item.get("name") or "").strip()
+            typ = (item.get("type") or "").strip()
+            ctx = (item.get("context") or "").strip()
+            if name:
+                line = f"**{name}**"
+                if typ:
+                    line += f" ({typ})"
+                if ctx:
+                    line += f": {ctx}"
+                lines.append(_bullet(line))
+    return lines
+
+
 def _render_quotes(items: list) -> list[str]:
     lines = [*_h2("Memorable Quotes")]
     for q in items:
@@ -240,7 +260,7 @@ _SECTION_RENDERERS: list[tuple[str, Any]] = [
     ("action_items", lambda v: _render_simple_list("Action Items", v)),
     ("competition_notes", lambda v: _render_simple_list("Competition Notes", v)),
     ("quotes", _render_quotes),
-    ("references", lambda v: _render_simple_list("References", v)),
+    ("references", _render_references),
     ("off_topic_notes", lambda v: _render_simple_list("Off-Topic Notes", v)),
     ("suggested_new_sections", _render_suggested_new_sections),
 ]

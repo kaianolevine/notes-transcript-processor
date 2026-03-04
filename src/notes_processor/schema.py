@@ -141,8 +141,21 @@ NOTES_SCHEMA: dict = {
         },
         "references": {
             "type": "array",
-            "description": "Named instructors, dancers, systems, or resources cited (e.g. 'Robert Royston shared center system', 'Brandy Guild').",
-            "items": {"type": "string"},
+            "description": "Named instructors, dancers, systems, or resources cited. Each item may be a string (e.g. 'Robert Royston shared center system') or an object with name, type, context for richer references.",
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "name": {"type": "string"},
+                            "type": {"type": "string"},
+                            "context": {"type": "string"},
+                        },
+                    },
+                ],
+            },
         },
         "off_topic_notes": {
             "type": "array",
