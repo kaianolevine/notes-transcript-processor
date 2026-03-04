@@ -112,8 +112,20 @@ NOTES_SCHEMA: dict = {
         },
         "patterns_and_sequences": {
             "type": "array",
-            "description": "Named patterns, move sequences, or combinations taught or referenced.",
-            "items": {"type": "string"},
+            "description": "Named patterns, move sequences, or combinations taught or referenced. Each item may be a string or an object with name and description.",
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "name": {"type": "string"},
+                            "description": {"type": "string"},
+                        },
+                    },
+                ],
+            },
         },
         "student_observations": {
             "type": "array",

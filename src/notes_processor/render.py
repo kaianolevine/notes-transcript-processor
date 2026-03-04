@@ -190,6 +190,20 @@ def _render_simple_list(heading: str, items: list) -> list[str]:
     return lines
 
 
+def _render_patterns_and_sequences(items: list) -> list[str]:
+    """Items may be strings or objects with name/description."""
+    lines = [*_h2("Patterns & Sequences")]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+        elif isinstance(item, dict):
+            name = (item.get("name") or "").strip()
+            desc = (item.get("description") or "").strip()
+            if name:
+                lines.append(_bullet(f"**{name}**" + (f": {desc}" if desc else "")))
+    return lines
+
+
 def _render_references(items: list) -> list[str]:
     """References can be strings or objects with name/type/context."""
     lines = [*_h2("References")]
@@ -254,7 +268,7 @@ _SECTION_RENDERERS: list[tuple[str, Any]] = [
     ("common_mistakes", _render_common_mistakes),
     (
         "patterns_and_sequences",
-        lambda v: _render_simple_list("Patterns & Sequences", v),
+        _render_patterns_and_sequences,
     ),
     ("student_observations", lambda v: _render_simple_list("Student Observations", v)),
     ("action_items", lambda v: _render_simple_list("Action Items", v)),
