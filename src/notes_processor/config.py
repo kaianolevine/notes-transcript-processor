@@ -7,7 +7,7 @@ from typing import Tuple
 
 @dataclass(frozen=True)
 class Config:
-    incoming_folder_id: str
+    input_folder_id: str
     output_folder_id: str
     processed_folder_id: str
 
@@ -28,7 +28,7 @@ def load_config_from_env() -> Config:
             raise RuntimeError(f"Missing required env var: {name}")
         return v
 
-    incoming = req("INCOMING_FOLDER_ID")
+    incoming = req("INPUT_FOLDER_ID")
     out = req("OUTPUT_FOLDER_ID")
     processed = req("PROCESSED_FOLDER_ID")
 
@@ -43,7 +43,7 @@ def load_config_from_env() -> Config:
         )
 
     return Config(
-        incoming_folder_id=incoming,
+        input_folder_id=incoming,
         output_folder_id=out,
         processed_folder_id=processed,
         llm_provider=providers[0],

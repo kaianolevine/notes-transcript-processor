@@ -330,19 +330,17 @@ def run() -> None:
     llms = {p: build_llm(provider=p, model=_model_for(p)) for p in providers}
 
     # Fail fast if any configured folder IDs are wrong or not shared with this credential.
-    _assert_drive_folder_access(g, cfg.incoming_folder_id, "Incoming")
+    _assert_drive_folder_access(g, cfg.input_folder_id, "Input")
     _assert_drive_folder_access(g, cfg.output_folder_id, "Output")
     _assert_drive_folder_access(g, cfg.processed_folder_id, "Processed")
 
     run_id = new_run_id()
     metrics_logger = MetricsLogger()
 
-    LOG.info(
-        "Scanning incoming folder", extra={"incoming_folder_id": cfg.incoming_folder_id}
-    )
+    LOG.info("Scanning input folder", extra={"input_folder_id": cfg.input_folder_id})
 
     files: list[tuple[object, list[str]]] = list(
-        _iter_transcript_files_recursive(g, cfg.incoming_folder_id)
+        _iter_transcript_files_recursive(g, cfg.input_folder_id)
     )
 
     if not files:
