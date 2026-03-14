@@ -403,6 +403,7 @@ def run() -> None:
                     messages=messages,
                     json_schema=NOTES_SCHEMA,
                     schema_name="notes",
+                    max_tokens=cfg.max_output_tokens,
                 )
                 notes = _extract_llm_json(result)
                 validate(instance=notes, schema=NOTES_SCHEMA)

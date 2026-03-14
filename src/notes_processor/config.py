@@ -19,6 +19,7 @@ class Config:
 
     max_files_per_run: int = 25
     min_transcript_chars: int = 200
+    max_output_tokens: int = 8192
 
 
 def load_config_from_env() -> Config:
@@ -51,4 +52,5 @@ def load_config_from_env() -> Config:
         llm_providers=providers,
         max_files_per_run=int(os.getenv("MAX_FILES_PER_RUN", "25")),
         min_transcript_chars=int(os.getenv("MIN_TRANSCRIPT_CHARS", "200")),
+        max_output_tokens=int(os.getenv("MAX_OUTPUT_TOKENS", "8192")),
     )
