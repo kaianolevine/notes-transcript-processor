@@ -224,6 +224,24 @@ def _render_references(items: list) -> list[str]:
     return lines
 
 
+def _render_off_topic_notes(items: list) -> list[str]:
+    """Off-topic items may be plain strings or objects with topic/summary."""
+    lines = [*_h2("Off-Topic Notes")]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+        elif isinstance(item, dict):
+            topic = (item.get("topic") or "").strip()
+            summary = (item.get("summary") or "").strip()
+            if topic:
+                lines.append(
+                    _bullet(f"**{topic}**" + (f": {summary}" if summary else ""))
+                )
+            elif summary:
+                lines.append(_bullet(summary))
+    return lines
+
+
 def _render_quotes(items: list) -> list[str]:
     lines = [*_h2("Memorable Quotes")]
     for q in items:
@@ -275,7 +293,7 @@ _SECTION_RENDERERS: list[tuple[str, Any]] = [
     ("competition_notes", lambda v: _render_simple_list("Competition Notes", v)),
     ("quotes", _render_quotes),
     ("references", _render_references),
-    ("off_topic_notes", lambda v: _render_simple_list("Off-Topic Notes", v)),
+    ("off_topic_notes", _render_off_topic_notes),
     ("suggested_new_sections", _render_suggested_new_sections),
 ]
 

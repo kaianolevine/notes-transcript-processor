@@ -175,7 +175,19 @@ NOTES_SCHEMA: dict = {
                 "Significant non-dance tangents worth preserving "
                 "(personal updates, logistics, scheduling, etc.)."
             ),
-            "items": {"type": "string"},
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "topic": {"type": "string"},
+                            "summary": {"type": "string"},
+                        },
+                    },
+                ],
+            },
         },
         # -- Feedback loop ----------------------------------------------------
         "suggested_new_sections": {
