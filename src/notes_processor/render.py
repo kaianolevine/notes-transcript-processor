@@ -242,11 +242,34 @@ def _render_off_topic_notes(items: list) -> list[str]:
     return lines
 
 
+def _render_student_observations(items: list) -> list[str]:
+    """Student observations may be plain strings or objects with observation."""
+    lines = [*_h2("Student Observations")]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+        elif isinstance(item, dict):
+            obs = (item.get("observation") or "").strip()
+            if obs:
+                lines.append(_bullet(obs))
+    return lines
+
+
 def _render_quotes(items: list) -> list[str]:
+    """Quotes may be plain strings or objects with speaker/quote/context."""
     lines = [*_h2("Memorable Quotes")]
     for q in items:
         if isinstance(q, str) and q.strip():
             lines.append(f'- "{q.strip()}"')
+        elif isinstance(q, dict):
+            quote = (q.get("quote") or "").strip()
+            if not quote:
+                continue
+            speaker = (q.get("speaker") or "").strip()
+            if speaker:
+                lines.append(f'- **{speaker}:** "{quote}"')
+            else:
+                lines.append(f'- "{quote}"')
     return lines
 
 
@@ -288,7 +311,7 @@ _SECTION_RENDERERS: list[tuple[str, Any]] = [
         "patterns_and_sequences",
         _render_patterns_and_sequences,
     ),
-    ("student_observations", lambda v: _render_simple_list("Student Observations", v)),
+    ("student_observations", _render_student_observations),
     ("action_items", lambda v: _render_simple_list("Action Items", v)),
     ("competition_notes", lambda v: _render_simple_list("Competition Notes", v)),
     ("quotes", _render_quotes),

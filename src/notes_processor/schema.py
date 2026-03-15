@@ -52,7 +52,7 @@ NOTES_SCHEMA: dict = {
                 "properties": {
                     "label": {"type": "string"},
                     "role": {"type": "string"},
-                    "name": {"type": "string"},
+                    "name": {"type": ["string", "null"]},
                 },
             },
         },
@@ -134,7 +134,18 @@ NOTES_SCHEMA: dict = {
                 "dancing -- what is improving, what still needs work. "
                 "Only present in private or coaching sessions."
             ),
-            "items": {"type": "string"},
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "observation": {"type": "string"},
+                        },
+                    },
+                ]
+            },
         },
         "action_items": {
             "type": "array",
@@ -149,7 +160,20 @@ NOTES_SCHEMA: dict = {
         "quotes": {
             "type": "array",
             "description": "Memorable or particularly clear instructor quotes. Use the speaker's actual words.",
-            "items": {"type": "string"},
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "speaker": {"type": "string"},
+                            "quote": {"type": "string"},
+                            "context": {"type": "string"},
+                        },
+                    },
+                ]
+            },
         },
         "references": {
             "type": "array",
