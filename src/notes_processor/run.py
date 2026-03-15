@@ -309,6 +309,7 @@ def _iter_transcript_files_recursive(
             continue
 
         if mt in (DOC_MIME, TXT_MIME):
+            LOG.info("File queued for processing", extra={"file": _field(item, "name")})
             yield item, rel_parts
 
 
@@ -372,7 +373,7 @@ def run() -> None:
         current_provider: str | None = None
         current_model: str | None = None
 
-        LOG.info("Processing transcript", extra={"file": name, "id": file_id})
+        LOG.info("Starting to process file", extra={"file": name})
 
         try:
             transcript = _read_transcript_text(g, file_id, mime_type).strip()
@@ -430,10 +431,14 @@ def run() -> None:
                 estimated_output_tokens = estimate_tokens(first_md)
 
             # Move original into processed folder (auditable + simple)
+            LOG.info(
+                "Moving processed file to folder",
+                extra={"file": name, "destination_folder_id": processed_parent_id},
+            )
             g.drive.move_file(file_id, new_parent_id=processed_parent_id)
 
             processed_count += 1
-            LOG.info("Done", extra={"file": name})
+            LOG.info("File completed successfully", extra={"file": name})
 
             # Emit one metrics record per provider so provider/model match.
             for provider in providers:
@@ -460,7 +465,9 @@ def run() -> None:
 
         except Exception as e:
             LOG.exception(
-                "Failed processing transcript", extra={"file": name, "id": file_id}
+                "Failed processing transcript: %s",
+                name,
+                extra={"file": name, "id": file_id},
             )
 
             # Use the provider/model that was running when the error occurred.
