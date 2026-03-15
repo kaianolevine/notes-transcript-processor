@@ -309,7 +309,7 @@ def _iter_transcript_files_recursive(
             continue
 
         if mt in (DOC_MIME, TXT_MIME):
-            LOG.info("File queued for processing", extra={"file": _field(item, "name")})
+            LOG.info("File queued: %s", _field(item, "name"))
             yield item, rel_parts
 
 
@@ -338,7 +338,7 @@ def run() -> None:
     run_id = new_run_id()
     metrics_logger = MetricsLogger()
 
-    LOG.info("Scanning input folder", extra={"input_folder_id": cfg.input_folder_id})
+    LOG.info("Scanning input folder: %s", cfg.input_folder_id)
 
     files: list[tuple[object, list[str]]] = list(
         _iter_transcript_files_recursive(g, cfg.input_folder_id)
@@ -353,7 +353,7 @@ def run() -> None:
     for f, rel_parts in files:
         file_timer = Timer()
         if processed_count >= cfg.max_files_per_run:
-            LOG.info("Reached max files per run", extra={"max": cfg.max_files_per_run})
+            LOG.info("Reached max files per run: %s", cfg.max_files_per_run)
             break
 
         file_id = _field(f, "id")
@@ -373,7 +373,7 @@ def run() -> None:
         current_provider: str | None = None
         current_model: str | None = None
 
-        LOG.info("Starting to process file", extra={"file": name})
+        LOG.info("Processing file: %s", name)
 
         try:
             transcript = _read_transcript_text(g, file_id, mime_type).strip()
@@ -382,8 +382,9 @@ def run() -> None:
 
             if len(transcript) < cfg.min_transcript_chars:
                 LOG.warning(
-                    "Transcript too short; skipping",
-                    extra={"file": name, "chars": len(transcript)},
+                    "Transcript too short; skipping %s (chars: %s)",
+                    name,
+                    len(transcript),
                 )
                 continue
 
@@ -432,13 +433,14 @@ def run() -> None:
 
             # Move original into processed folder (auditable + simple)
             LOG.info(
-                "Moving processed file to folder",
-                extra={"file": name, "destination_folder_id": processed_parent_id},
+                "Moving processed file to folder: %s -> %s",
+                name,
+                processed_parent_id,
             )
             g.drive.move_file(file_id, new_parent_id=processed_parent_id)
 
             processed_count += 1
-            LOG.info("File completed successfully", extra={"file": name})
+            LOG.info("File completed successfully: %s", name)
 
             # Emit one metrics record per provider so provider/model match.
             for provider in providers:
@@ -465,9 +467,9 @@ def run() -> None:
 
         except Exception as e:
             LOG.exception(
-                "Failed processing transcript: %s",
+                "Failed processing transcript: %s (id: %s)",
                 name,
-                extra={"file": name, "id": file_id},
+                file_id,
             )
 
             # Use the provider/model that was running when the error occurred.
@@ -499,12 +501,13 @@ def run() -> None:
 
             if _is_insufficient_quota(e):
                 LOG.error(
-                    "LLM quota exhausted; stopping run early. Configure billing/credits for the API key, then re-run.",
-                    extra={"provider": fail_provider, "model": fail_model},
+                    "LLM quota exhausted; stopping run early. Configure billing/credits for the API key, then re-run. provider=%s model=%s",
+                    fail_provider,
+                    fail_model,
                 )
                 break
 
             # Continue to next file rather than failing the whole run
             continue
 
-    LOG.info("Run complete", extra={"processed": processed_count})
+    LOG.info("Run complete: %s files", processed_count)
