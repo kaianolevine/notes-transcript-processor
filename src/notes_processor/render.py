@@ -132,10 +132,16 @@ def _render_metadata(notes: dict[str, Any]) -> list[str]:
 
 
 def _render_key_concepts(items: list) -> list[str]:
+    """Key concepts may be plain strings or objects with concept/detail."""
     lines = [*_h2("Key Concepts")]
     for item in items:
         if isinstance(item, str) and item.strip():
             lines.append(_bullet(item.strip()))
+        elif isinstance(item, dict):
+            concept = (item.get("concept") or "").strip()
+            if concept:
+                detail = (item.get("detail") or "").strip()
+                lines.append(_bullet(concept + (f" — {detail}" if detail else "")))
     return lines
 
 
@@ -242,6 +248,34 @@ def _render_off_topic_notes(items: list) -> list[str]:
     return lines
 
 
+def _render_action_items(items: list) -> list[str]:
+    """Action items may be plain strings or objects with action/rationale."""
+    lines = [*_h2("Action Items")]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+        elif isinstance(item, dict):
+            action = (item.get("action") or "").strip()
+            if action:
+                rationale = (item.get("rationale") or "").strip()
+                lines.append(_bullet(action + (f" — {rationale}" if rationale else "")))
+    return lines
+
+
+def _render_competition_notes(items: list) -> list[str]:
+    """Competition notes may be plain strings or objects with note/context."""
+    lines = [*_h2("Competition Notes")]
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            lines.append(_bullet(item.strip()))
+        elif isinstance(item, dict):
+            note = (item.get("note") or "").strip()
+            if note:
+                context = (item.get("context") or "").strip()
+                lines.append(_bullet(note + (f" — {context}" if context else "")))
+    return lines
+
+
 def _render_student_observations(items: list) -> list[str]:
     """Student observations may be plain strings or objects with observation."""
     lines = [*_h2("Student Observations")]
@@ -312,8 +346,8 @@ _SECTION_RENDERERS: list[tuple[str, Any]] = [
         _render_patterns_and_sequences,
     ),
     ("student_observations", _render_student_observations),
-    ("action_items", lambda v: _render_simple_list("Action Items", v)),
-    ("competition_notes", lambda v: _render_simple_list("Competition Notes", v)),
+    ("action_items", _render_action_items),
+    ("competition_notes", _render_competition_notes),
     ("quotes", _render_quotes),
     ("references", _render_references),
     ("off_topic_notes", _render_off_topic_notes),

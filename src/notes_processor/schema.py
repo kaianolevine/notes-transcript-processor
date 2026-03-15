@@ -67,7 +67,19 @@ NOTES_SCHEMA: dict = {
                 "High-level principles or ideas discussed. Each item is a "
                 "concise statement of the concept."
             ),
-            "items": {"type": "string"},
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "concept": {"type": "string"},
+                            "detail": {"type": "string"},
+                        },
+                    },
+                ]
+            },
         },
         "vocabulary_terms": {
             "type": "array",
@@ -150,12 +162,36 @@ NOTES_SCHEMA: dict = {
         "action_items": {
             "type": "array",
             "description": "Concrete takeaways or homework assigned to the student for next practice.",
-            "items": {"type": "string"},
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "action": {"type": "string"},
+                            "rationale": {"type": "string"},
+                        },
+                    },
+                ]
+            },
         },
         "competition_notes": {
             "type": "array",
             "description": "Strategy, judging insight, or competition-specific advice discussed.",
-            "items": {"type": "string"},
+            "items": {
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "note": {"type": "string"},
+                            "context": {"type": "string"},
+                        },
+                    },
+                ]
+            },
         },
         "quotes": {
             "type": "array",
