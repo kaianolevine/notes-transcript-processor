@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Event, Lock
+from typing import Callable
 
 from googleapiclient.errors import HttpError
 from jsonschema import validate
@@ -313,6 +316,239 @@ def _iter_transcript_files_recursive(
             yield item, rel_parts
 
 
+def _call_provider(llm: object, messages: list, schema: dict) -> object:
+    """Call LLM generate_json; used as thread target for provider-level parallelism."""
+    return llm.generate_json(
+        messages=messages,
+        json_schema=schema,
+        schema_name="notes",
+    )
+
+
+def _process_one_file(
+    f: object,
+    rel_parts: list[str],
+    cfg: object,
+    g: GoogleAPI,
+    llms: dict,
+    providers: tuple,
+    run_id: str,
+    metrics_logger: MetricsLogger,
+    model_for_fn: Callable[[str], str],
+    drive_lock: Lock,
+    quota_hit: object,
+) -> int:
+    """Process a single file: read transcript, run all providers in parallel, upload outputs, move to processed.
+    Returns 1 if file was processed successfully, 0 otherwise. Sets quota_hit if insufficient_quota seen.
+    """
+    file_id = _field(f, "id")
+    name = _field(f, "name", file_id)
+    mime_type = _field(f, "mimeType")
+    file_timer = Timer()
+
+    with drive_lock:
+        output_parent_id = _ensure_path(g, cfg.output_folder_id, rel_parts)
+        processed_parent_id = _ensure_path(g, cfg.processed_folder_id, rel_parts)
+
+    transcript = ""
+    char_count_input = 0
+    estimated_input_tokens = 0
+    char_count_output = None
+    estimated_output_tokens = None
+
+    LOG.info("Starting to process file", extra={"file": name})
+
+    try:
+        transcript = _read_transcript_text(g, file_id, mime_type).strip()
+        char_count_input = len(transcript)
+        estimated_input_tokens = estimate_tokens(transcript)
+
+        if len(transcript) < cfg.min_transcript_chars:
+            LOG.warning(
+                "Transcript too short; skipping",
+                extra={"file": name, "chars": len(transcript)},
+            )
+            return 0
+
+        msg_dicts = build_messages(transcript, source_filename=name)
+        messages = [LLMMessage(role=m["role"], content=m["content"]) for m in msg_dicts]
+        base = _safe_name(name)
+
+        # Run all providers in parallel
+        provider_outcomes: dict = (
+            {}
+        )  # provider -> ("ok", notes, md) | ("err", exception, None)
+        with ThreadPoolExecutor(max_workers=len(providers)) as provider_executor:
+            future_to_provider = {
+                provider_executor.submit(
+                    _call_provider,
+                    llms[provider],
+                    messages,
+                    NOTES_SCHEMA,
+                ): provider
+                for provider in providers
+            }
+            for future in as_completed(future_to_provider):
+                provider = future_to_provider[future]
+                try:
+                    result = future.result()
+                    notes = _extract_llm_json(result)
+                    validate(instance=notes, schema=NOTES_SCHEMA)
+                    md = render_markdown(notes)
+                    provider_outcomes[provider] = ("ok", notes, md)
+                except Exception as e:
+                    provider_outcomes[provider] = ("err", e, None)
+                    LOG.exception(
+                        "Failed provider for file: %s",
+                        name,
+                        extra={"provider": provider, "file": name, "id": file_id},
+                    )
+                    try:
+                        metrics_logger.emit(
+                            RunMetrics(
+                                run_id=run_id,
+                                stage="file_complete",
+                                file_id=file_id,
+                                file_name=name,
+                                char_count_input=char_count_input,
+                                estimated_input_tokens=estimated_input_tokens,
+                                model=model_for_fn(provider),
+                                provider=provider,
+                                duration_s=file_timer.elapsed(),
+                                success=False,
+                                error=str(e),
+                                estimated_output_tokens=None,
+                                char_count_output=None,
+                                estimated_cost_usd=None,
+                            )
+                        )
+                    except Exception:
+                        pass
+                    if _is_insufficient_quota(e) and quota_hit is not None:
+                        quota_hit.set()
+
+        first_md = None
+        for provider in providers:
+            outcome = provider_outcomes.get(provider)
+            if outcome and outcome[0] == "ok":
+                _, notes, md = outcome
+                if first_md is None:
+                    first_md = md
+                label = _provider_label(provider)
+                if len(providers) == 1:
+                    md_name = f"{base} - notes.md"
+                else:
+                    md_name = f"{base} - notes - {label}.md"
+                with drive_lock:
+                    g.drive.upload_bytes(
+                        parent_id=output_parent_id,
+                        filename=md_name,
+                        content=md.encode("utf-8"),
+                        mime_type="text/markdown",
+                    )
+
+        if first_md is None:
+            LOG.exception(
+                "Failed processing transcript: %s",
+                name,
+                extra={"file": name, "id": file_id},
+            )
+            fail_provider = providers[0] if providers else cfg.llm_provider
+            try:
+                metrics_logger.emit(
+                    RunMetrics(
+                        run_id=run_id,
+                        stage="file_complete",
+                        file_id=file_id,
+                        file_name=name,
+                        char_count_input=char_count_input,
+                        estimated_input_tokens=estimated_input_tokens,
+                        model=model_for_fn(fail_provider),
+                        provider=fail_provider,
+                        duration_s=file_timer.elapsed(),
+                        success=False,
+                        error="All providers failed",
+                        estimated_output_tokens=None,
+                        char_count_output=None,
+                        estimated_cost_usd=None,
+                    )
+                )
+            except Exception:
+                pass
+            return 0
+
+        char_count_output = len(first_md)
+        estimated_output_tokens = estimate_tokens(first_md)
+
+        LOG.info(
+            "Moving processed file to folder",
+            extra={"file": name, "destination_folder_id": processed_parent_id},
+        )
+        with drive_lock:
+            g.drive.move_file(file_id, new_parent_id=processed_parent_id)
+
+        LOG.info("File completed successfully", extra={"file": name})
+
+        for provider in providers:
+            if provider_outcomes.get(provider, (None,))[0] == "ok":
+                try:
+                    metrics_logger.emit(
+                        RunMetrics(
+                            run_id=run_id,
+                            stage="file_complete",
+                            file_id=file_id,
+                            file_name=name,
+                            char_count_input=char_count_input,
+                            estimated_input_tokens=estimated_input_tokens,
+                            model=model_for_fn(provider),
+                            provider=provider,
+                            duration_s=file_timer.elapsed(),
+                            success=True,
+                            error=None,
+                            estimated_output_tokens=estimated_output_tokens,
+                            char_count_output=char_count_output,
+                            estimated_cost_usd=None,
+                        )
+                    )
+                except Exception:
+                    pass
+
+        return 1
+
+    except Exception as e:
+        LOG.exception(
+            "Failed processing transcript: %s",
+            name,
+            extra={"file": name, "id": file_id},
+        )
+        fail_provider = getattr(cfg, "llm_provider", "anthropic")
+        fail_model = model_for_fn(fail_provider)
+        try:
+            metrics_logger.emit(
+                RunMetrics(
+                    run_id=run_id,
+                    stage="file_complete",
+                    file_id=file_id,
+                    file_name=name,
+                    char_count_input=char_count_input,
+                    estimated_input_tokens=estimated_input_tokens,
+                    model=fail_model,
+                    provider=fail_provider,
+                    duration_s=file_timer.elapsed(),
+                    success=False,
+                    error=str(e),
+                    estimated_output_tokens=estimated_output_tokens,
+                    char_count_output=char_count_output,
+                    estimated_cost_usd=None,
+                )
+            )
+        except Exception:
+            pass
+        if _is_insufficient_quota(e) and quota_hit is not None:
+            quota_hit.set()
+        return 0
+
+
 def run() -> None:
     cfg = load_config_from_env()
     g = GoogleAPI.from_env()
@@ -348,163 +584,47 @@ def run() -> None:
         LOG.info("No files found")
         return
 
-    processed_count = 0
+    files_to_process = files[: cfg.max_files_per_run]
+    if len(files) > cfg.max_files_per_run:
+        LOG.info(
+            "Reached max files per run",
+            extra={"max": cfg.max_files_per_run, "total_found": len(files)},
+        )
 
-    for f, rel_parts in files:
-        file_timer = Timer()
-        if processed_count >= cfg.max_files_per_run:
-            LOG.info("Reached max files per run", extra={"max": cfg.max_files_per_run})
-            break
+    max_concurrent_files = int(os.getenv("MAX_CONCURRENT_FILES", "4"))
+    max_workers = (
+        min(max_concurrent_files, len(files_to_process)) if files_to_process else 1
+    )
+    drive_lock = Lock()
+    quota_hit = Event()
 
-        file_id = _field(f, "id")
-        name = _field(f, "name", file_id)
-        mime_type = _field(f, "mimeType")
+    def model_for(provider: str) -> str:
+        return _model_for(provider)
 
-        # Preserve incoming folder structure in output/processed folders
-        output_parent_id = _ensure_path(g, cfg.output_folder_id, rel_parts)
-        processed_parent_id = _ensure_path(g, cfg.processed_folder_id, rel_parts)
-
-        # Defaults so failure metrics can still be emitted
-        transcript = ""
-        char_count_input = 0
-        estimated_input_tokens = 0
-        char_count_output = None
-        estimated_output_tokens = None
-        current_provider: str | None = None
-        current_model: str | None = None
-
-        LOG.info("Starting to process file", extra={"file": name})
-
-        try:
-            transcript = _read_transcript_text(g, file_id, mime_type).strip()
-            char_count_input = len(transcript)
-            estimated_input_tokens = estimate_tokens(transcript)
-
-            if len(transcript) < cfg.min_transcript_chars:
-                LOG.warning(
-                    "Transcript too short; skipping",
-                    extra={"file": name, "chars": len(transcript)},
-                )
-                continue
-
-            # Build kaiano.llm messages
-            msg_dicts = build_messages(transcript, source_filename=name)
-            messages = [
-                LLMMessage(role=m["role"], content=m["content"]) for m in msg_dicts
-            ]
-
-            # Run all configured providers and write labeled markdown outputs.
-            base = _safe_name(name)
-            first_md: str | None = None
-
-            for provider in providers:
-                current_provider = provider
-                current_model = _model_for(provider)
-                result = llms[provider].generate_json(
-                    messages=messages,
-                    json_schema=NOTES_SCHEMA,
-                    schema_name="notes",
-                )
-                notes = _extract_llm_json(result)
-                validate(instance=notes, schema=NOTES_SCHEMA)
-
-                md = render_markdown(notes)
-                if first_md is None:
-                    first_md = md
-
-                label = _provider_label(provider)
-
-                if len(providers) == 1:
-                    md_name = f"{base} - notes.md"
-                else:
-                    md_name = f"{base} - notes - {label}.md"
-
-                g.drive.upload_bytes(
-                    parent_id=output_parent_id,
-                    filename=md_name,
-                    content=md.encode("utf-8"),
-                    mime_type="text/markdown",
-                )
-
-            if first_md is not None:
-                char_count_output = len(first_md)
-                estimated_output_tokens = estimate_tokens(first_md)
-
-            # Move original into processed folder (auditable + simple)
-            LOG.info(
-                "Moving processed file to folder",
-                extra={"file": name, "destination_folder_id": processed_parent_id},
+    with ThreadPoolExecutor(max_workers=max_workers) as file_executor:
+        futures = [
+            file_executor.submit(
+                _process_one_file,
+                f,
+                rel_parts,
+                cfg,
+                g,
+                llms,
+                providers,
+                run_id,
+                metrics_logger,
+                model_for,
+                drive_lock,
+                quota_hit,
             )
-            g.drive.move_file(file_id, new_parent_id=processed_parent_id)
+            for f, rel_parts in files_to_process
+        ]
+        processed_count = sum(fut.result() for fut in futures)
 
-            processed_count += 1
-            LOG.info("File completed successfully", extra={"file": name})
-
-            # Emit one metrics record per provider so provider/model match.
-            for provider in providers:
-                metrics = RunMetrics(
-                    run_id=run_id,
-                    stage="file_complete",
-                    file_id=file_id,
-                    file_name=name,
-                    char_count_input=char_count_input,
-                    estimated_input_tokens=estimated_input_tokens,
-                    model=_model_for(provider),
-                    provider=provider,
-                    duration_s=file_timer.elapsed(),
-                    success=True,
-                    error=None,
-                    estimated_output_tokens=estimated_output_tokens,
-                    char_count_output=char_count_output,
-                    estimated_cost_usd=None,
-                )
-                try:
-                    metrics_logger.emit(metrics)
-                except Exception:
-                    pass
-
-        except Exception as e:
-            LOG.exception(
-                "Failed processing transcript: %s",
-                name,
-                extra={"file": name, "id": file_id},
-            )
-
-            # Use the provider/model that was running when the error occurred.
-            fail_provider = (
-                current_provider if current_provider is not None else cfg.llm_provider
-            )
-            fail_model = current_model if current_model is not None else cfg.llm_model
-
-            metrics = RunMetrics(
-                run_id=run_id,
-                stage="file_complete",
-                file_id=file_id,
-                file_name=name,
-                char_count_input=char_count_input,
-                estimated_input_tokens=estimated_input_tokens,
-                model=fail_model,
-                provider=fail_provider,
-                duration_s=file_timer.elapsed(),
-                success=False,
-                error=str(e),
-                estimated_output_tokens=estimated_output_tokens,
-                char_count_output=char_count_output,
-                estimated_cost_usd=None,
-            )
-            try:
-                metrics_logger.emit(metrics)
-            except Exception:
-                pass
-
-            if _is_insufficient_quota(e):
-                LOG.error(
-                    "LLM quota exhausted; stopping run early. Configure billing/credits for the API key, then re-run.",
-                    extra={"provider": fail_provider, "model": fail_model},
-                )
-                break
-
-            # Continue to next file rather than failing the whole run
-            continue
+    if quota_hit.is_set():
+        LOG.error(
+            "LLM quota exhausted; stopping run early. Configure billing/credits for the API key, then re-run.",
+            extra={},
+        )
 
     LOG.info("Run complete", extra={"processed": processed_count})
